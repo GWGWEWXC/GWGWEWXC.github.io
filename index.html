@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AR 诗句粒子交互系统 (终极适配版)</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: "Microsoft YaHei", sans-serif; background: #000; }
+        #canvas-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 2; pointer-events: none; }
+        #video-input { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; z-index: 0; transform: scaleX(-1); opacity: 1; }
+        
+        #loading-panel { 
+            position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%); 
+            z-index: 100; text-align: center; color: white; width: 90%; pointer-events: none;
+        }
+        #loading-text { font-size: 20px; font-weight: bold; margin-bottom: 10px; text-shadow: 0 0 5px black; }
+        #error-log { 
+            font-size: 12px; color: #ff6b6b; background: rgba(0,0,0,0.8); 
+            padding: 10px; border-radius: 5px; text-align: left; display: none; margin-top: 10px; pointer-events: auto;
+        }
+
+        #instruction { 
+            position: absolute; z-index: 3; color: white; border-radius: 12px; 
+            pointer-events: none; border: 1px solid rgba(255,255,255,0.2);
+            backdrop-filter: blur(4px); background: rgba(0,0,0,0.4);
+        }
+        @media (min-width: 769px) {
+            #instruction { top: 20px; left: 20px; padding: 15px; }
+        }
+        @media (max-width: 768px) {
+            #instruction {
+                bottom: 30px; left: 5%; width: 90%; padding: 8px; 
+                box-sizing: border-box; font-size: 12px; text-align: center;
+            }
+            #instruction p { margin: 3px 0; }
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/hands.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+    <div id="loading-panel">
+        <div id="loading-text">正在加载资源...<br><span style="font-size:14px; opacity:0.8;">请竖屏使用并允许摄像头</span></div>
+        <div id="error-log"></div>
+    </div>
+
+    <div id="instruction">
+        <p>👋 <b>触碰</b>: 抚摸文字产生涟漪</p>
+        <p>🖐 <b>左手</b>: 1-4指 切换诗句</p>
+        <p>✋ <b>右手</b>: 张开/捏合 控制炸裂</p>
+    </div>
+
+    <video id="video-input" playsinline webkit-playsinline></video>
+    <div id="canvas-container"></div>
+
+<script>
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
+    function logError(msg) {
+        const el = document.getElementById('error-log');
+        el.style.display = 'block';
+        el.innerHTML += `> ${msg}<br>`;
+        document.getElementById('loading-text').innerText = "提示：";
+    }
+
+    // --- 1. Three.js 初始化 ---
+    const scene = new THREE.Scene();
+    
+    // 【核心修复1】大幅增加手机端的摄像机距离
+    // 电脑 130，手机改到 320，确保再窄的屏幕也能装下长句
+    const initialZ = isMobile ? 320 : 130; 
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 3000);
+    camera.position.z = initialZ;
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, isMobile ? 1.5 : 2));
+    document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+    // 重新计算可视区域（用于手势交互映射）
+    let visibleHeight, visibleWidth;
+    function updateVisibleArea() {
+        const vFOV = THREE.MathUtils.degToRad(camera.fov);
+        visibleHeight = 2 * Math.tan(vFOV / 2) * camera.position.z;
+        visibleWidth = visibleHeight * (window.innerWidth / window.innerHeight);
+    }
+    updateVisibleArea();
+
+    // --- 2. 粒子初始化 ---
+    function getTexture() {
+        const c = document.createElement('canvas');
+        c.width = 32; c.height = 32;
+        const ctx = c.getContext('2d');
+        const g = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+        g.addColorStop(0, 'rgba(255,255,255,1)');
+        g.addColorStop(0.5, 'rgba(255,255,255,0.6)');
+        g.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = g; ctx.fillRect(0,0,32,32);
+        return new THREE.CanvasTexture(c);
+    }
+
+    const COUNT = isMobile ? 8000 : 20000; 
+    const geo = new THREE.BufferGeometry();
+    const pos = new Float32Array(COUNT * 3);
+    const tar = new Float32Array(COUNT * 3);
+    
+    // 初始化隐藏
+    for(let i=0; i<COUNT; i++) { 
+        pos[i*3]=0; pos[i*3+1]=0; pos[i*3+2]=5000;
+        tar[i*3]=0; tar[i*3+1]=0; tar[i*3+2]=5000; 
+    }
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    
+    const mat = new THREE.PointsMaterial({
+        size: isMobile ? 4.0 : 3.2, 
+        map: getTexture(), 
+        color: 0x00ffff, transparent: true, opacity: 0.9, 
+        blending: THREE.AdditiveBlending, depthWrite: false
+    });
+    const particles = new THREE.Points(geo, mat);
+    scene.add(particles);
+
+    // --- 3. 文字生成与缩放逻辑 ---
+    function updateText(text) {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        const W = 800, H = 300; 
+        canvas.width = W; canvas.height = H;
+        
+        ctx.fillStyle = '#000'; ctx.fillRect(0,0,W,H);
+        
+        let fontSize = 80;
+        if(text.length > 5) fontSize = 65;
+        
+        ctx.font = `bold ${fontSize}px "Microsoft YaHei"`;
+        ctx.fillStyle = '#fff'; 
+        ctx.textAlign='center'; 
+        ctx.textBaseline='middle';
+        ctx.fillText(text, W/2, H/2);
+        
+        const data = ctx.getImageData(0,0,W,H).data;
+        const coords = [];
+        const gap = isMobile ? 3 : 2; 
+
+        // 【核心修复2】粒子坐标缩放因子
+        // 电脑端 0.55，手机端强行改为 0.28，让文字整体体积缩小一倍，确保不溢出屏幕
+        const scaleFactor = isMobile ? 0.28 : 0.55;
+
+        for(let y=0; y<H; y+=gap) {
+            for(let x=0; x<W; x+=gap) {
+                if(data[(y*W+x)*4] > 128) {
+                    coords.push({
+                        x: (x - W/2) * scaleFactor, 
+                        y: -(y - H/2) * scaleFactor
+                    });
+                }
+            }
+        }
+        
+        coords.sort(() => Math.random() - 0.5); // 随机打乱
+
+        for(let i=0; i<COUNT; i++) {
+            if(i < coords.length) {
+                tar[i*3] = coords[i].x;
+                tar[i*3+1] = coords[i].y;
+                tar[i*3+2] = 0;
+            } else {
+                tar[i*3+2] = 5000; 
+            }
+        }
+        
+        if(firstRun) {
+            for(let i=0; i<COUNT*3; i++) pos[i] = tar[i];
+            firstRun = false;
+        }
+    }
+
+    let firstRun = true;
+    let currentText = "胡琴声下梦成真"; 
+    updateText(currentText);
+
+    // --- 4. 摄像头与交互 ---
+    const video = document.getElementById('video-input');
+    let scatter = 0;
+    let points = [];
+    let isLoaded = false;
+
+    setTimeout(() => {
+        if (!isLoaded) logError("加载较慢，请检查网络或权限。");
+    }, 15000);
+
+    function onResults(results) {
+        if (!isLoaded) {
+            isLoaded = true;
+            document.getElementById('loading-panel').style.display = 'none';
+        }
+        points = [];
+        let newScatter = 0;
+
+        if (results.multiHandLandmarks) {
+            for (let i = 0; i < results.multiHandLandmarks.length; i++) {
+                const lm = results.multiHandLandmarks[i];
+                const label = results.multiHandedness[i].label;
+                const tip = lm[8]; 
+                
+                // 交互点映射
+                points.push({
+                    x: (0.5 - tip.x) * visibleWidth,
+                    y: (0.5 - tip.y) * visibleHeight
+                });
+
+                // 手势逻辑
+                let fingers = 0;
+                if(lm[8].y < lm[6].y) fingers++;
+                if(lm[12].y < lm[10].y) fingers++;
+                if(lm[16].y < lm[14].y) fingers++;
+                if(lm[20].y < lm[18].y) fingers++;
+
+                const pinchDist = Math.hypot(lm[4].x-lm[8].x, lm[4].y-lm[8].y);
+                const isPinching = pinchDist < 0.05;
+
+                // 左手切换 (非捏合)
+                if (!isPinching && label === 'Left') {
+                   let t = currentText;
+                   if(fingers===1) t="胡琴声下梦成真";
+                   else if(fingers===2) t="柳枝梢上雪亦洁";
+                   else if(fingers===3) t="以上韵脚全无序";
+                   else if(fingers===4) t="真是瑕迹把峦变";
+                   if(t!==currentText) { currentText=t; updateText(t); }
+                }
+
+                // 右手炸裂
+                if (label === 'Right') {
+                    const spread = Math.hypot(lm[4].x-lm[20].x, lm[4].y-lm[20].y);
+                    newScatter = Math.max(0, (spread-0.1)*800); 
+                }
+            }
+        }
+        scatter += (newScatter - scatter) * 0.1;
+    }
+
+    try {
+        const hands = new Hands({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/${file}`
+        });
+        hands.setOptions({ 
+            maxNumHands: 2, 
+            modelComplexity: isMobile ? 0 : 1, 
+            minDetectionConfidence: 0.5, 
+            minTrackingConfidence: 0.5 
+        });
+        hands.onResults(onResults);
+
+        const cameraUtils = new Camera(video, {
+            onFrame: async () => { await hands.send({image: video}); },
+            width: isMobile ? 480 : 640,
+            height: isMobile ? 640 : 480,
+            facingMode: 'user'
+        });
+        cameraUtils.start().catch(err => logError("摄像头错误: " + err.message));
+    } catch (e) { logError("初始化错误: " + e.message); }
+
+    // --- 5. 渲染循环 ---
+    const clock = new THREE.Clock();
+    function animate() {
+        requestAnimationFrame(animate);
+        const time = clock.getElapsedTime();
+        const p = geo.attributes.position.array;
+        
+        for(let i=0; i<COUNT; i++) {
+            const idx = i*3;
+            if (tar[idx+2] > 1000) { 
+                p[idx]=0; p[idx+1]=0; p[idx+2]=5000; continue; 
+            }
+
+            let tx = tar[idx], ty = tar[idx+1], tz = tar[idx+2];
+            
+            // 炸裂
+            if(scatter > 1) {
+                tx += Math.sin(time*5+i)*scatter;
+                ty += Math.cos(time*3+i)*scatter;
+                tz += Math.sin(time*2+i)*scatter;
+            }
+
+            // 缓动
+            p[idx] += (tx - p[idx]) * 0.1;
+            p[idx+1] += (ty - p[idx+1]) * 0.1;
+            p[idx+2] += (tz - p[idx+2]) * 0.1;
+
+            // 交互斥力
+            for(let pt of points) {
+                const dx = p[idx]-pt.x;
+                const dy = p[idx+1]-pt.y;
+                const d2 = dx*dx + dy*dy;
+                if(d2 < 900) { 
+                    const dist = Math.sqrt(d2);
+                    const f = (30 - dist) / 30; 
+                    const a = Math.atan2(dy, dx);
+                    p[idx] += Math.cos(a)*f*8;
+                    p[idx+1] += Math.sin(a)*f*8;
+                    p[idx+2] += f*20; 
+                }
+            }
+        }
+        geo.attributes.position.needsUpdate = true;
+        renderer.render(scene, camera);
+    }
+
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth/window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        updateVisibleArea();
+    });
+    
+    animate();
+
+</script>
+</body>
+</html>
