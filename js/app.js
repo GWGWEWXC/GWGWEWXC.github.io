@@ -1,6 +1,6 @@
 // ========== 配置区域 ==========
 const MQTT_CONFIG = {
-    brokerUrl: 'ws://broker-cn.emqx.io:8083/mqtt',
+    brokerUrl: 'wss://broker-cn.emqx.io:8084/mqtt',
     pubTopic: 'dk/cdnu/laboratory/gwww/temp',
     subTopic: 'dk/cdnu/laboratory/gwww/swtich',
     clientId: 'web_' + Math.random().toString(16).substr(2, 8)
