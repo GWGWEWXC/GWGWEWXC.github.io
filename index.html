@@ -3,16 +3,17 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ESP32 物联网监控</title>
-    <!-- 引入 ECharts -->
-    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
-    <!-- 引入 MQTT.js (关键修改) -->
+    <title>独居老人辅助检测系统</title>
+    
+    <!-- ✅ 使用国内 CDN -->
+    <script src="https://cdn.bootcdn.net/ajax/libs/echarts/5.4.3/echarts.min.js"></script>
     <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    
     <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
     <div class="container">
-        <h1>🏠 ESP32 实时监控</h1>
+        <h1>🏠 独居老人辅助检测系统</h1>
         
         <!-- 仪表盘区域 -->
         <div class="dashboard">
@@ -43,27 +44,104 @@
             </div>
         </div>
         
-        <!-- 图表区域 -->
+        <!-- AI 智能分析卡片 -->
+        <div id="aiAnalysisCard" class="ai-analysis-card" style="display:none;">
+            <div class="ai-header">
+                <h3>🤖 AI 智能分析</h3>
+                <button id="aiRefresh" class="btn-ai-refresh">🔄 重新分析</button>
+            </div>
+            <div class="ai-status">
+                <span class="status-dot" id="aiStatusDot"></span>
+                <span id="aiStatusText">等待分析...</span>
+            </div>
+            <div class="ai-content">
+                <p id="aiSummary" class="ai-summary"></p>
+                <p id="aiAnalysis" class="ai-analysis"></p>
+            </div>
+            <div class="ai-suggestions">
+                <h4>💡 建议：</h4>
+                <ul id="aiSuggestionList"></ul>
+            </div>
+            <div class="ai-risk" id="aiRiskLevel" style="display:none;">
+                <span>风险等级：</span>
+                <span id="aiRiskText"></span>
+            </div>
+        </div>
+        
+        <!-- 健康报告卡片 -->
+        <div id="healthReportCard" class="health-report-card" style="display:none;">
+            <div class="report-header">
+                <h3>📊 健康趋势报告</h3>
+                <div class="report-controls">
+                    <select id="reportType" class="report-select">
+                        <option value="daily">日报</option>
+                        <option value="weekly">周报</option>
+                    </select>
+                    <button id="generateReport" class="btn-report">📝 生成报告</button>
+                </div>
+            </div>
+            
+            <div class="report-loading" id="reportLoading" style="display:none;">
+                <div class="spinner"></div>
+                <p>AI 正在分析健康数据...</p>
+            </div>
+            
+            <div class="report-content" id="reportContent">
+                <!-- 报告内容将通过 JS 动态填充 -->
+            </div>
+        </div>
+        
+        <!-- 健康趋势分析图表 -->
         <div class="chart-container">
-            <h2>📊 实时温湿度趋势 (内存缓存)</h2>
+            <h2>📈 健康趋势分析</h2>
+            <div class="time-selector">
+                <button class="btn-time active" onclick="loadTrendData(24)">24 小时</button>
+                <button class="btn-time" onclick="loadTrendData(168)">7 天</button>
+            </div>
+            <div id="trendChart" style="width: 100%; height: 400px;"></div>
+        </div>
+        
+        <!-- 实时数据图表 -->
+        <div class="chart-container">
+            <h2>📊 温湿度实时趋势</h2>
             <div id="tempHumiChart" style="width: 100%; height: 300px;"></div>
         </div>
         
         <div class="chart-container">
-            <h2>📊 实时传感器趋势 (内存缓存)</h2>
+            <h2>📊 传感器实时趋势</h2>
             <div id="sensorChart" style="width: 100%; height: 300px;"></div>
         </div>
         
-        <!-- 控制区域 -->
-        <div class="control-panel">
-            <h2>🎛️ 电机控制</h2>
-            <div class="control-item">
-                <button id="motorOn" class="btn btn-success">开启电机</button>
-                <button id="motorOff" class="btn btn-danger">关闭电机</button>
-                <span id="motorStatus" class="status">状态：未知</span>
+        <!-- 语音交互助手 -->
+        <div class="voice-control-panel">
+            <h2>🎙️ 语音交互助手</h2>
+            <div class="voice-control-item">
+                <button id="voiceBtn" class="btn-voice">
+                    <span class="voice-icon">🎤</span>
+                    <span class="voice-text">按住说话</span>
+                </button>
+                <div id="voiceStatus" class="voice-status">准备就绪</div>
+            </div>
+            <div id="voiceResponse" class="voice-response" style="display:none;">
+                <div class="response-header">
+                    <span class="ai-avatar">🤖</span>
+                    <span>AI 助手</span>
+                </div>
+                <div class="response-content" id="responseContent"></div>
+                <button id="playResponse" class="btn-play">🔊 播放语音</button>
             </div>
         </div>
 
+        <!-- 控制区域 -->
+        <div class="control-panel">
+            <h2>🎛️ 风扇控制</h2>
+            <div class="control-item">
+                <button id="motorOn" class="btn btn-success">开启</button>
+                <button id="motorOff" class="btn btn-danger">关闭</button>
+                <span id="motorStatus" class="status">状态：未知</span>
+            </div>
+        </div>
+        
         <!-- 连接状态 -->
         <div class="connection-status">
             <span>MQTT 连接状态：</span>
